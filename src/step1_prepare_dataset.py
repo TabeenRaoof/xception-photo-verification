@@ -5,21 +5,15 @@ This script takes the raw Kaggle downloads (ArtiFact + CASIA 2.0),
 discovers the directory layout, samples a balanced subset, resizes
 every image to 299x299, and splits into train/val/test folders.
 
-IMPORTANT: The ArtiFact dataset organizes images by generator/source,
+Note: The ArtiFact dataset organizes images by generator/source,
 with each subfolder containing a metadata.csv file that has a "target"
 column (0 = real, 1 = fake/AI-generated). We read these CSV files to
 correctly classify images rather than guessing from folder names.
 
-BEFORE RUNNING:
-  - Download + unzip both Kaggle datasets into data/raw/
-  - Verify paths in config.py match your directory names
-  - Install deps: pip install Pillow tqdm scikit-learn pandas
 
 USAGE:
   python step1_prepare_dataset.py
 
-Author: Tabeen
-Course: CS483 Deep Learning, SFBU
 """
 
 import os
