@@ -53,6 +53,7 @@ def load_feature_extractor(model_name, device):
     Returns:
         model on the specified device, ready for inference
     """
+    
     print(f"\n   Loading {model_name} from timm...")
 
     # pretrained=True loads ImageNet weights; num_classes=0 removes the head → feature extractor
@@ -205,6 +206,7 @@ def main():
     print(f"\n  Label remapping: {label_remap}")
     print(f"  (ImageFolder label → Our label)")
 
+
     # -----------------------------------------------------------------
     # Extract features for each model
     # -----------------------------------------------------------------
@@ -249,7 +251,7 @@ def main():
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-# ---------------------------------------------------------------------------
+    # ---------------------------------------------------------------------------
     # Final summary: list all saved feature files
     # -----------------------------------------------------------------
     print(f"\n{'='*60}")
