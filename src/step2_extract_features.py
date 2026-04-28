@@ -1,3 +1,42 @@
+"""
+step2_extract_features.py — Feature Extraction for TruPhoto
+
+This script runs every processed image through a FROZEN pretrained
+CNN (XceptionNet by default, MobileNetV2 for ablation) and saves
+the extracted feature vectors as .npy files for the classifiers.
+
+WHY FROZEN FEATURES?
+  Instead of fine-tuning the full CNN (which needs a GPU and hours
+  of training), we treat the pretrained network as a fixed feature
+  extractor. The CNN has already learned to recognize edges, textures,
+  shapes, and objects from ImageNet — those features transfer well
+  to detecting image authenticity artifacts.
+
+  We chop off the classification head and take the output of the
+  global average pooling layer — a 2048-dim vector for XceptionNet
+  or 1280-dim for MobileNetV2. Each image becomes one row in a
+  feature matrix. Then a lightweight classifier (Random Forest, SVM)
+  trains on these features in Step 3.
+
+HOW IT WORKS:
+  1. Load the pretrained model from `timm` with num_classes=0
+     (this removes the final FC layer, giving us the pooled features)
+  2. Set model to eval mode + freeze all parameters
+  3. Pass every image through the model in batches
+  4. Collect the feature vectors + remapped labels
+  5. Save as .npy files: X_train, y_train, X_val, y_val, X_test, y_test
+
+BEFORE RUNNING:
+  - Complete step1_prepare_dataset.py first
+  - Install: pip install torch torchvision timm tqdm numpy
+
+USAGE:
+  python src/step2_extract_features.py
+
+  By default, extracts features from BOTH XceptionNet and MobileNetV2.
+  To extract only one, edit the MODELS_TO_EXTRACT list below.
+"""
+
 import os
 import sys
 import time
@@ -53,7 +92,7 @@ def load_feature_extractor(model_name, device):
     Returns:
         model on the specified device, ready for inference
     """
-    
+
     print(f"\n   Loading {model_name} from timm...")
 
     # pretrained=True loads ImageNet weights; num_classes=0 removes the head → feature extractor
