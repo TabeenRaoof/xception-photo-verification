@@ -1,3 +1,15 @@
+"""
+dataset_loader.py — PyTorch Dataset + DataLoader for TruPhoto.
+
+This module provides the ImageFolder-based dataset and dataloaders
+that Step 2 (feature extraction) and Step 5 (Gradio demo) will use.
+
+
+USAGE (imported by other scripts):
+    from dataset_loader import get_dataloaders, get_transforms
+
+"""
+
 import os
 import sys
 
