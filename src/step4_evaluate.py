@@ -12,13 +12,12 @@ BEFORE RUNNING:
   - Complete step3_train_classifiers.py first
   - Install: pip install scikit-learn numpy matplotlib seaborn joblib
 
-USAGE:
-  python src/step4_evaluate.py
+USAGE (run from repo root):
+  python -m src.step4_evaluate
 
 """
 
 import os
-import sys
 
 import numpy as np
 import joblib
@@ -31,9 +30,7 @@ from sklearn.metrics import (
     precision_recall_fscore_support
 )
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-from config import (
+from src.config import (
     MODELS_DIR, RESULTS_DIR, CLASS_NAMES,
     PRIMARY_MODEL, ABLATION_MODEL, FEATURES_DIR
 )
@@ -45,11 +42,11 @@ def load_features(model_name, split):
     """Load feature array and label array."""
 
     return (
-        np.load(os.path.join(FEATURES_DIR, f"{model_name}_X_{split}.npy"))
+        np.load(os.path.join(FEATURES_DIR, f"{model_name}_x_{split}.npy")),
         np.load(os.path.join(FEATURES_DIR, f"{model_name}_y_{split}.npy"))
     )
 
-def evaluate_model(clf, x_test, y_test, model_name, clf_name, scaler=None)
+def evaluate_model(clf, x_test, y_test, model_name, clf_name, scaler=None):
     """
     Evaluate a classifier and return results dict.
     If scaler is provided (for SVM), scale the features first.
@@ -61,7 +58,7 @@ def evaluate_model(clf, x_test, y_test, model_name, clf_name, scaler=None)
     y_pred = clf.predict(x_test)
     acc = accuracy_score(y_test, y_pred)
     report = classification_report(y_test, y_pred, target_names=LABEL_NAMES)
-    CM = confusion_matrix(y_test, y_pred)
+    cm = confusion_matrix(y_test, y_pred)
     precision, recall, f1, support = precision_recall_fscore_support(
         y_test, y_pred, average=None
     )
@@ -84,7 +81,7 @@ def plot_confusion_matrix(cm, title, save_path):
     fig, ax = plt.subplots(figsize=(8, 6))
 
     sns.heatmap(
-        cm, annot=True, fmt="d", cmap="Blues",xticklables=LABEL_NAMES, yticklabels=LABEL_NAMES,
+        cm, annot=True, fmt="d", cmap="Blues",xticklabels=LABEL_NAMES, yticklabels=LABEL_NAMES,
         ax=ax, cbar_kws={"shrink": 0.8}
 
     )
@@ -121,7 +118,7 @@ def plot_ablation_comparison(all_results, save_path):
     ax.set_title("TruPhoto Ablation Study - Test Set Accuracy", fontsize=14, fontweight="bold")
 
     # Add baseline reference line
-    ax.axhline(y=92.23, color="red", linestyle="--", linewidth=1, alpha=7)
+    ax.axhline(y=92.23, color="red", linestyle="--", linewidth=1, alpha=0.7)
     ax.text(len(labels)-.5, 92.5, "Ali et al.baseline (92.23%)")
 
     ax.set_ylim(0, 105)
@@ -129,6 +126,7 @@ def plot_ablation_comparison(all_results, save_path):
     ax.spines["right"].set_visible(False)
 
     plt.tight_layout()
+    fig.savefig(save_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
 
     print(f"    Saved: {save_path}")
@@ -272,7 +270,7 @@ def main():
         print(f"\n  Best: {best['model_name']} + {best['clf_name']} ({best['accuracy']:.4f})")
 
     print(f"\n  Results saved to: {RESULTS_DIR}")
-    print(f"\n  Next step: python src/step5_gradio_demo.py\n")
+    print(f"\n  Next step: python -m src.step5_gradio_demo\n")
 
 
 if __name__ == "__main__":

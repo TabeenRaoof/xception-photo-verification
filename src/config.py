@@ -13,10 +13,10 @@ import os
 # root of the project 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# ROW DATASET LOCATIONS
+# RAW DATASET LOCATIONS
 RAW_DATA_DIR = os.path.join(PROJECT_ROOT, "data", "raw")
-ARTIFACT_DIR = os.path.join(PROJECT_ROOT, "artifact")
-CASIA2_DIR = os.path.join(PROJECT_ROOT, "casia2")
+ARTIFACT_DIR = os.path.join(RAW_DATA_DIR, "artifact")
+CASIA2_DIR = os.path.join(RAW_DATA_DIR, "casia2")
 
 # processed data (resized images organized by class)
 PROCESSED_DIR = os.path.join(PROJECT_ROOT, "data", "processed")
@@ -37,14 +37,13 @@ CLASS_NAMES = {
     1: "Forged",
     2: "AI_Generated"
 }
-
 NUM_CLASSES = 3
 
 
 # DATASET PARAMETERS
 
 # Target number of images per class (balanced sampling)
-SAMPLES_PER_CLASS = 5000
+SAMPLES_PER_CLASS = 12500
 
 TRAIN_RATIO = 0.7
 VAL_RATIO = 0.15
@@ -84,12 +83,12 @@ NUM_WORKERS = 4
 # CLASSIFIER HYPERPARAMETERS
 #----------------------------
 # Random Forest
-RF_N_ESTIMATORS = 500
-RF_MAX_DEPTH = None # let tree grow fully
+RF_N_ESTIMATORS = 200
+RF_MAX_DEPTH = 30 # let tree grow fully
 RF_MIN_SAMPLES_SPLIT = 5
 RF_CLASS_WEIGHT = "balanced" # to handle any residual imbalance
 
 # SVM (ablation model)
-SVM_KERNEL = "RBF"
+SVM_KERNEL = "rbf"
 SVM_C = 10.0
 SVM_GAMMA = "scale"

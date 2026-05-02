@@ -1,0 +1,39 @@
+# macOS / OS
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+venv/
+env/
+*.egg-info/
+build/
+dist/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+
+# Data: all regenerable artifacts. Raw data is too large to track,
+# processed and features are derivable from raw + step1 + step2.
+data/raw/
+data/processed/
+data/features/
+
+# Trained model artifacts (regeneratable, can be hundreds of MB each)
+models/*
+!models/.gitkeep
+
+# Per-run evaluation results (regeneratable)
+results/*
+!results/.gitkeep
+
+# Notebook checkpoints
+.ipynb_checkpoints/
+notebooks/*
+!notebooks/.gitkeep

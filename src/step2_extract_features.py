@@ -30,15 +30,14 @@ BEFORE RUNNING:
   - Complete step1_prepare_dataset.py first
   - Install: pip install torch torchvision timm tqdm numpy
 
-USAGE:
-  python src/step2_extract_features.py
+USAGE (run from repo root):
+  python -m src.step2_extract_features
 
   By default, extracts features from BOTH XceptionNet and MobileNetV2.
   To extract only one, edit the MODELS_TO_EXTRACT list below.
 """
 
 import os
-import sys
 import time
 
 import numpy as np
@@ -50,12 +49,11 @@ from tqdm import tqdm
 # project imports
 # ---------------------------------------------------------------------------
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from config import (
+from src.config import (
     FEATURES_DIR, BATCH_SIZE, NUM_WORKERS,
     PRIMARY_MODEL, ABLATION_MODEL, RANDOM_SEED
 )
-from dataset_loader import (
+from src.dataset_loader import (
     get_dataloader, get_imagefolder_label_mapping
 )
 
@@ -191,7 +189,7 @@ def save_features(features, labels, model_name, split_name, output_dir):
     """
     os.makedirs(output_dir, exist_ok=True)
 
-    x_path = os.path.join(output_dir, f"{model_name}_X_{split_name}.npy")
+    x_path = os.path.join(output_dir, f"{model_name}_x_{split_name}.npy")
     y_path = os.path.join(output_dir, f"{model_name}_y_{split_name}.npy")
 
     np.save(x_path, features)
@@ -310,7 +308,7 @@ def main():
 
     print(f"\n  Total disk usage: {total_size:.1f} MB")
     print(f"  Output directory: {FEATURES_DIR}")
-    print(f"\n  Next step: python src/step3_train_classifiers.py\n")
+    print(f"\n  Next step: python -m src.step3_train_classifiers\n")
 
 
 if __name__ == "__main__":

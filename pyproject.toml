@@ -1,0 +1,15 @@
+[project]
+name = "truphoto"
+version = "0.1.0"
+description = "Image authenticity classifier (Real / Forged / AI-Generated) using Xception features."
+requires-python = ">=3.9"
+authors = [{ name = "Tabeen Raoof" }]
+readme = "README.md"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]

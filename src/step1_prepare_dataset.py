@@ -11,8 +11,8 @@ column (0 = real, 1 = fake/AI-generated). We read these CSV files to
 correctly classify images rather than guessing from folder names.
 
 
-USAGE:
-  python step1_prepare_dataset.py
+USAGE (run from repo root):
+  python -m src.step1_prepare_dataset
 
 """
 
@@ -28,14 +28,28 @@ from PIL import Image
 from tqdm import tqdm
 from sklearn.model_selection import train_test_split
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src"))
-from config import (
+from src.config import (
     ARTIFACT_DIR, CASIA2_DIR, PROCESSED_DIR, RESULTS_DIR,
     CLASS_NAMES, SAMPLES_PER_CLASS, IMG_SIZE,
     TRAIN_RATIO, VAL_RATIO, TEST_RATIO, RANDOM_SEED
 )
 
 VALID_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
+
+# ArtiFact folders known to contain AI-generated images. Some folders use the
+# canonical target=0/1 schema (those are handled directly), but others use a
+# class-index schema (e.g. big_gan/metadata.csv has target=<imagenet_class>).
+# When we hit a non-binary target, we fall back to this list to decide whether
+# the rows are AI. Folders explicitly using target=0 (cycle_gan, pro_gan, etc.
+# in our current data) are NOT in this list — their explicit label is honored.
+AI_GENERATOR_FOLDERS = {
+    "big_gan", "cips", "cycle_gan", "ddpm", "denoising_diffusion_gan",
+    "diffusion_gan", "face_synthetics", "gansformer", "gau_gan",
+    "generative_inpainting", "glide", "lama", "latent_diffusion", "mat",
+    "palette", "pro_gan", "projected_gan", "sfhq", "stable_diffusion",
+    "star_gan", "stylegan1", "stylegan2", "stylegan3", "taming_transformer",
+    "vq_diffusion",
+}
 
 def find_images(directory):
     """Recursively find all image files under a directory, sorted."""
@@ -77,15 +91,19 @@ def discover_artifact_paths(artifact_base):
 
     Falls back to folder name matching if no metadata.csv found.
 
-    Returns: (real_paths, ai_generated_paths)
+    Returns:
+        (real_by_source, ai_by_source) — both are dicts mapping
+        the ArtiFact subfolder name (e.g. "stylegan2") to a list of
+        absolute image paths from that subfolder. Grouping by source
+        is what enables stratified sampling in Phase 3.
     """
-    real_paths = []
-    ai_paths = []
+    real_by_source = defaultdict(list)
+    ai_by_source = defaultdict(list)
     metadata_found = False
 
     if not os.path.isdir(artifact_base):
         print(f" [ERROR] ArtiFact directory not found: {artifact_base}")
-        return real_paths, ai_paths
+        return dict(real_by_source), dict(ai_by_source)
 
     # Strategy 1: Read metadata.csv files
     for root, dirs, files in os.walk(artifact_base):
@@ -101,6 +119,9 @@ def discover_artifact_paths(artifact_base):
 
             metadata_found = True
             folder_name = os.path.relpath(root, artifact_base)
+            # Use the top-level subfolder name as the source key,
+            # so nested layouts (e.g. stylegan2/train) collapse into "stylegan2".
+            source_key = folder_name.split(os.sep)[0]
 
             # Find the column that contains image file paths
             path_col = None
@@ -115,6 +136,7 @@ def discover_artifact_paths(artifact_base):
 
             real_count = 0
             ai_count = 0
+            unmapped_count = 0
             for _, row in df.iterrows():
                 target = int(row["target"])
                 img_rel_path = str(row[path_col])
@@ -128,15 +150,24 @@ def discover_artifact_paths(artifact_base):
                     continue
 
                 if target == 0:
-                    real_paths.append(img_full)
+                    real_by_source[source_key].append(img_full)
                     real_count += 1
                 elif target == 1:
-                    ai_paths.append(img_full)
+                    ai_by_source[source_key].append(img_full)
                     ai_count += 1
+                else:
+                    # Non-binary target schema (e.g. big_gan uses target=imagenet_class).
+                    # Fall back to folder name: if it's a known generator, treat as AI.
+                    if source_key in AI_GENERATOR_FOLDERS:
+                        ai_by_source[source_key].append(img_full)
+                        ai_count += 1
+                    else:
+                        unmapped_count += 1
 
+            tail = f", {unmapped_count:,} unmapped" if unmapped_count else ""
             print(f"  [META] {folder_name:30s} → "
-                  f"{real_count:,} real, {ai_count:,} AI-generated")
-            
+                  f"{real_count:,} real, {ai_count:,} AI-generated{tail}")
+
         except Exception as e:
             print(f"  [WARN] Error reading {meta_path}: {e}")
 
@@ -160,7 +191,7 @@ def discover_artifact_paths(artifact_base):
 
         search_dirs = ([os.path.join(artifact_base, sd) for sd in split_dirs]
                        if split_dirs else [artifact_base])
-        
+
         for search_dir in search_dirs:
             if not os.path.isdir(search_dir):
                 continue
@@ -174,19 +205,84 @@ def discover_artifact_paths(artifact_base):
 
                 if any(kw in folder_lower for kw in real_keywords):
                     imgs = find_images(folder_path)
-                    real_paths.extend(imgs)
+                    real_by_source[folder_name].extend(imgs)
                     print(f"  [REAL] {folder_name:30s} → {len(imgs):,} images")
 
                 elif any(kw in folder_lower for kw in ai_keywords):
                     imgs = find_images(folder_path)
-                    ai_paths.extend(imgs)
+                    ai_by_source[folder_name].extend(imgs)
                     print(f"  [AI] {folder_name:30s} → {len(imgs):,} AI-generated (by name)")
                 else:
                     imgs = find_images(folder_path)
                     if imgs:
                         print(f"  [???]   {folder_name:30s} → {len(imgs):,} images (UNMAPPED)")
 
-    return real_paths, ai_paths
+    # Defensive dedup: if a path ended up in both Real and AI (e.g. mixed
+    # metadata schema), trust the explicit target=0 label and remove from AI.
+    real_paths_set = set()
+    for paths in real_by_source.values():
+        real_paths_set.update(paths)
+    removed = 0
+    for src in list(ai_by_source.keys()):
+        kept = [p for p in ai_by_source[src] if p not in real_paths_set]
+        removed += len(ai_by_source[src]) - len(kept)
+        ai_by_source[src] = kept
+        if not kept:
+            del ai_by_source[src]
+    if removed:
+        print(f"  [DEDUP] removed {removed:,} AI rows that also appear as Real (kept Real label).")
+
+    return dict(real_by_source), dict(ai_by_source)
+
+
+def discover_casia2_authentic_paths(casia2_base):
+    """
+    Find authentic (untouched) images in CASIA 2.0.
+
+    These are added to the Real class to break the "scene → Forged" shortcut
+    that emerges when Real is sourced exclusively from ArtiFact (mostly faces
+    and curated photos) and Forged is sourced exclusively from CASIA Tp/
+    (exclusively non-face scene photos). Including CASIA Au/ in Real means
+    the model sees CASIA-style scene photos with both Real and Forged labels,
+    forcing it to use actual tampering cues rather than dataset-source priors.
+
+    Returns:
+        dict mapping CASIA subfolder name (typically just "Au") to a list of
+        absolute image paths.
+    """
+    authentic_by_source = defaultdict(list)
+
+    if not os.path.isdir(casia2_base):
+        print(f"  [ERROR] CASIA2 directory not found: {casia2_base}")
+        return dict(authentic_by_source)
+
+    authentic_keywords = {"au", "authentic", "original"}
+    tampered_markers = ("tp", "tamper", "forg", "splic", "fake")
+
+    matched_dirs = []
+    for root, dirs, _files in os.walk(casia2_base):
+        for d in dirs:
+            d_lower = d.lower()
+            if any(t in d_lower for t in tampered_markers):
+                continue
+            if d_lower in authentic_keywords or "authentic" in d_lower:
+                matched_dirs.append(os.path.join(root, d))
+
+    if not matched_dirs:
+        print(f"  [WARN] No authentic subfolder found under {casia2_base}")
+        return dict(authentic_by_source)
+
+    seen = set()
+    for adir in matched_dirs:
+        imgs = find_images(adir)
+        new_imgs = [p for p in imgs if p not in seen]
+        seen.update(new_imgs)
+        rel = os.path.relpath(adir, casia2_base)
+        source_key = rel.split(os.sep)[0]
+        authentic_by_source[source_key].extend(new_imgs)
+        print(f"  [AUTH] {rel:30s} → {len(new_imgs):,} images")
+
+    return dict(authentic_by_source)
 
 
 def discover_casia2_forged_paths(casia2_base):
@@ -194,20 +290,23 @@ def discover_casia2_forged_paths(casia2_base):
     Find tampered (forged) images in CASIA 2.0.
 
     CASIA 2.0 layout:
-      <casia2_base>/Au/   → authentic images (skipped — ArtiFact supplies "real")
+      <casia2_base>/Au/   → authentic images (now mixed into Real, see above)
       <casia2_base>/Tp/   → tampered/spliced images (our "Forged" class)
 
     Some redistributions use 'CASIA2' or different casing; we match
     case-insensitively and fall back to keyword search if the canonical
     folders aren't present.
 
-    Returns: list of paths to forged images
+    Returns:
+        dict mapping CASIA subfolder name (typically just "Tp") to a list
+        of forged image paths. Same shape as discover_artifact_paths so
+        stratified_sample can treat both classes uniformly.
     """
-    forged_paths = []
+    forged_by_source = defaultdict(list)
 
     if not os.path.isdir(casia2_base):
         print(f"  [ERROR] CASIA2 directory not found: {casia2_base}")
-        return forged_paths
+        return dict(forged_by_source)
 
     tampered_keywords = ["tp", "tampered", "tamper", "forged", "fake", "spliced"]
 
@@ -221,57 +320,129 @@ def discover_casia2_forged_paths(casia2_base):
 
     if not matched_dirs:
         print(f"  [WARN] No tampered/forged subfolder found under {casia2_base}")
-        return forged_paths
+        return dict(forged_by_source)
 
     seen = set()
     for tdir in matched_dirs:
         imgs = find_images(tdir)
         new_imgs = [p for p in imgs if p not in seen]
         seen.update(new_imgs)
-        forged_paths.extend(new_imgs)
         rel = os.path.relpath(tdir, casia2_base)
+        # Use the top-level subfolder as the source key.
+        source_key = rel.split(os.sep)[0]
+        forged_by_source[source_key].extend(new_imgs)
         print(f"  [FORGED] {rel:30s} → {len(new_imgs):,} images")
 
-    return forged_paths
+    return dict(forged_by_source)
 
 
 def discover_all_paths(artifact_base, casia2_base):
     """
-    Single entry point that returns paths for all 3 project classes.
+    Single entry point that returns paths for all 3 project classes,
+    grouped by source folder so the sampler can stratify across them.
 
-    Combines ArtiFact (Real, AI_Generated) and CASIA 2.0 (Forged) into
-    one dict keyed by the class names defined in config.CLASS_NAMES.
+    Combines ArtiFact (Real + AI_Generated) and CASIA 2.0 (Real + Forged).
+    CASIA Au/ is merged into Real to break the "scene -> Forged" shortcut
+    caused by Forged being CASIA-only and Real being ArtiFact-only.
 
     Returns:
-        dict: {"Real": [...], "Forged": [...], "AI_Generated": [...]}
+        dict: {
+            "Real":         {source_folder: [paths]},  # ArtiFact + CASIA Au/
+            "Forged":       {source_folder: [paths]},  # CASIA Tp/
+            "AI_Generated": {source_folder: [paths]},  # ArtiFact generators
+        }
     """
     print("--- ArtiFact: Real + AI_Generated ---")
-    real_paths, ai_paths = discover_artifact_paths(artifact_base)
+    real_by_src_artifact, ai_by_src = discover_artifact_paths(artifact_base)
 
-    print("\n--- CASIA 2.0: Forged ---")
-    forged_paths = discover_casia2_forged_paths(casia2_base)
+    print("\n--- CASIA 2.0: Forged (Tp/) ---")
+    forged_by_src = discover_casia2_forged_paths(casia2_base)
+
+    print("\n--- CASIA 2.0: Authentic (Au/) -> mixed into Real class ---")
+    casia_real_by_src = discover_casia2_authentic_paths(casia2_base)
+
+    # Merge CASIA Au sources into Real with a "casia2_" prefix so the source
+    # keys remain unambiguous (and step4b can attribute per-source results).
+    real_by_src = dict(real_by_src_artifact)
+    for src, paths in casia_real_by_src.items():
+        real_by_src[f"casia2_{src}"] = paths
 
     return {
-        CLASS_NAMES[0]: real_paths,
-        CLASS_NAMES[1]: forged_paths,
-        CLASS_NAMES[2]: ai_paths,
+        CLASS_NAMES[0]: real_by_src,
+        CLASS_NAMES[1]: forged_by_src,
+        CLASS_NAMES[2]: ai_by_src,
     }
 
 
-def balanced_sample(paths, n_samples, label_name, seed):
-    """Randomly sample n_samples images, or take all if fewer available."""
-    random.seed(seed)
-    available = len(paths)
-    if available == 0:
+def stratified_sample(paths_by_source, n_samples, label_name, seed):
+    """
+    Sample n_samples paths, distributing equally across source folders.
+
+    This replaces a flat random.sample() — that approach silently
+    over-represents the largest source (e.g. a single ArtiFact generator
+    with 10x more images than the others), turning the "AI_Generated"
+    class into a "stylegan2 only" class. Stratifying forces every source
+    to contribute, which is what makes the class label semantically valid.
+
+    Algorithm:
+      1. Equal allocation: each source gets n_samples // num_sources slots.
+      2. If any source has fewer images than its slot, take all it has.
+      3. Redistribute the leftover slots randomly across sources that
+         still have unused images.
+
+    Args:
+        paths_by_source: dict {source_folder_name: [image_paths]}
+        n_samples:       target total number of samples
+        label_name:      class name (for logging)
+        seed:            RNG seed for determinism
+
+    Returns:
+        flat list of sampled paths (shuffled).
+    """
+    rng = random.Random(seed)
+
+    sources = sorted(paths_by_source.keys())
+    if not sources:
         print(f"  [ERROR] No images found for class '{label_name}'!")
         return []
-    if available < n_samples:
-        print(f"  [WARN] {label_name}: requested {n_samples:,} but only {available:,} available.")
-        return paths.copy()
 
-    sampled = random.sample(paths, n_samples)
-    print(f"  [OK]   {label_name}: sampled {len(sampled):,} / {available:,}")
-    return sampled
+    base_quota = n_samples // len(sources)
+
+    # Phase 1: shuffle each source and split into (sampled, unused).
+    sampled = {}
+    unused = {}
+    for src in sources:
+        avail = list(paths_by_source[src])
+        rng.shuffle(avail)
+        take = min(base_quota, len(avail))
+        sampled[src] = avail[:take]
+        unused[src] = avail[take:]
+
+    # Phase 2: redistribute the deficit across whatever's still available.
+    deficit = n_samples - sum(len(v) for v in sampled.values())
+    if deficit > 0:
+        leftover_pool = [(src, p) for src in sources for p in unused[src]]
+        rng.shuffle(leftover_pool)
+        for src, p in leftover_pool[:deficit]:
+            sampled[src].append(p)
+
+    flat = [p for src in sources for p in sampled[src]]
+    rng.shuffle(flat)
+
+    # Reporting
+    total_avail = sum(len(paths_by_source[s]) for s in sources)
+    print(f"  [OK]   {label_name}: sampled {len(flat):,} / {total_avail:,} "
+          f"(target {n_samples:,}) across {len(sources)} sources")
+    for src in sources:
+        avail = len(paths_by_source[src])
+        taken = len(sampled[src])
+        marker = "  (exhausted)" if taken == avail and avail < base_quota else ""
+        print(f"           {src:<40s}  {taken:>5,} / {avail:>6,}{marker}")
+
+    if len(flat) < n_samples:
+        print(f"  [WARN] {label_name}: only {len(flat):,} available "
+              f"(requested {n_samples:,}). Class will be undersized.")
+    return flat
 
 
 def resize_and_save(src_path, dst_path, target_size):
@@ -333,17 +504,21 @@ def main():
 
     print(f"\n  Discovery totals:")
     for label, name in CLASS_NAMES.items():
-        print(f"    {name} (Class {label}): {len(paths_by_class[name]):,}")
+        sources = paths_by_class[name]
+        total = sum(len(v) for v in sources.values())
+        print(f"    {name} (Class {label}): {total:,} images across {len(sources)} sources")
 
-    if any(len(paths_by_class[name]) == 0 for name in CLASS_NAMES.values()):
+    if any(sum(len(v) for v in paths_by_class[name].values()) == 0
+           for name in CLASS_NAMES.values()):
         print("\n  [FATAL] One or more classes have zero images.")
         print(f"    ARTIFACT_DIR = {ARTIFACT_DIR}")
         print(f"    CASIA2_DIR   = {CASIA2_DIR}")
         sys.exit(1)
 
-    print(f"\n[PHASE 3] Sampling {SAMPLES_PER_CLASS:,} images per class...\n")
+    print(f"\n[PHASE 3] Stratified sampling: {SAMPLES_PER_CLASS:,} images per class,")
+    print(f"          equally distributed across each class's source folders.\n")
     sampled_by_class = {
-        name: balanced_sample(paths_by_class[name], SAMPLES_PER_CLASS, name, RANDOM_SEED)
+        name: stratified_sample(paths_by_class[name], SAMPLES_PER_CLASS, name, RANDOM_SEED)
         for name in CLASS_NAMES.values()
     }
 
@@ -352,6 +527,13 @@ def main():
 
     print(f"\n[PHASE 4] Resizing to {IMG_SIZE}x{IMG_SIZE} and splitting...\n")
     if os.path.exists(PROCESSED_DIR):
+        confirm = input(
+            f"  PROCESSED_DIR already exists: {PROCESSED_DIR}\n"
+            f"  This will DELETE its entire contents. Continue? [y/N] "
+        ).strip().lower()
+        if confirm not in ("y", "yes"):
+            print("  Aborted.")
+            sys.exit(0)
         shutil.rmtree(PROCESSED_DIR)
 
     metadata_rows = []
@@ -388,7 +570,7 @@ def main():
         cells = "".join(f" {c.get(name, 0):>14,}" for name in CLASS_NAMES.values())
         print(f"  {split:<10}{cells} {t:>8,}")
 
-    print(f"\n  Next step: python src/step2_extract_features.py\n")
+    print(f"\n  Next step: python -m src.step2_extract_features\n")
 
 
 if __name__ == "__main__":

@@ -14,12 +14,13 @@ BEFORE RUNNING:
   - Complete step2_extract_features.py first
   - Install: pip install scikit-learn numpy joblib
 
-USAGE:
-  python src/step3_train_classifiers.py
+USAGE (run from repo root):
+  python -m src.step3_train_classifiers
 """
 
+import json
 import os
-import sys
+import subprocess
 import time
 
 import numpy as np
@@ -28,14 +29,56 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.svm import SVC
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import accuracy_score
+from sklearn.linear_model import LogisticRegression
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from config import (
+def train_logreg(x_train, y_train, x_val, y_val):
+    print("\n    Scaling + training Logistic Regression...")
+    scaler = StandardScaler()
+    x_train_s = scaler.fit_transform(x_train)
+    x_val_s = scaler.transform(x_val)
+
+    clf = LogisticRegression(
+        max_iter=2000,
+        C=1.0,
+        class_weight="balanced",
+        n_jobs=-1,
+        random_state=RANDOM_SEED,
+    )
+    clf.fit(x_train_s, y_train)
+    val_acc = accuracy_score(y_val, clf.predict(x_val_s))
+    return clf, scaler, val_acc
+
+from src.config import (
     FEATURES_DIR, MODELS_DIR, CLASS_NAMES,
     PRIMARY_MODEL, ABLATION_MODEL, RANDOM_SEED,
     RF_N_ESTIMATORS, RF_MAX_DEPTH, RF_MIN_SAMPLES_SPLIT, RF_CLASS_WEIGHT,
     SVM_KERNEL, SVM_C, SVM_GAMMA
 )
+
+def _git_sha():
+    """Return short git SHA, or 'unknown' if not in a git repo."""
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=2,
+        )
+        return out.stdout.strip() or "unknown"
+    except Exception:
+        return "unknown"
+
+
+def save_meta(model_path, **fields):
+    """Write a sibling .meta.json next to a saved .joblib model."""
+    meta = {
+        "trained_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "git_sha": _git_sha(),
+        **fields,
+    }
+    meta_path = model_path.replace(".joblib", ".meta.json")
+    with open(meta_path, "w") as f:
+        json.dump(meta, f, indent=2, default=str)
+    return meta_path
+
 
 def load_features(model_name, split):
     """Load feature array and label array for a given model and split."""
@@ -131,7 +174,12 @@ def main():
     results = []
 
     # Run the full 2x2 ablation matrix
-    for model_name in [PRIMARY_MODEL, ABLATION_MODEL]:
+    # NOTE: Skipping PRIMARY_MODEL (xception) for the CASIA-Au-augmented run.
+    # Xception SVM training is multi-hour at SAMPLES_PER_CLASS=12500 and the
+    # MobileNetV2 + SVM combination is the established winner across every
+    # data composition tested. Slide 7 already documents this trade-off.
+    # Restore [PRIMARY_MODEL, ABLATION_MODEL] to run the full ablation.
+    for model_name in [ABLATION_MODEL]:
         print(f"\n{'='*60}")
         print(f"  Feature extractor: {model_name}")
         print(f"{'='*60}")
@@ -153,6 +201,17 @@ def main():
 
         rf_path = os.path.join(MODELS_DIR, f"rf_{model_name}.joblib")
         joblib.dump(rf, rf_path)
+        save_meta(
+            rf_path,
+            classifier="random_forest",
+            feature_extractor=model_name,
+            val_accuracy=rf_val_acc,
+            n_estimators=RF_N_ESTIMATORS,
+            max_depth=RF_MAX_DEPTH,
+            min_samples_split=RF_MIN_SAMPLES_SPLIT,
+            class_weight=RF_CLASS_WEIGHT,
+            random_seed=RANDOM_SEED,
+        )
         print(f"    Saved: {rf_path}")
 
         results.append((model_name, "Random Forest", rf_val_acc))
@@ -165,6 +224,17 @@ def main():
         scaler_path = os.path.join(MODELS_DIR, f"scaler_{model_name}.joblib")
         joblib.dump(svm, svm_path)
         joblib.dump(scaler, scaler_path)
+        save_meta(
+            svm_path,
+            classifier="svm",
+            feature_extractor=model_name,
+            val_accuracy=svm_val_acc,
+            kernel=SVM_KERNEL,
+            C=SVM_C,
+            gamma=SVM_GAMMA,
+            scaler_path=scaler_path,
+            random_seed=RANDOM_SEED,
+        )
         print(f"    Saved: {svm_path}")
         print(f"    Saved: {scaler_path}")
 
@@ -186,7 +256,7 @@ def main():
         print(f"\n  Best combination: {best[0]} + {best[1]} ({best[2]:.4f})")
 
     print(f"\n  Models saved to: {MODELS_DIR}")
-    print(f"\n  Next step: python src/step4_evaluate.py\n")
+    print(f"\n  Next step: python -m src.step4_evaluate\n")
 
 
 if __name__ == "__main__":

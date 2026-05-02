@@ -11,14 +11,12 @@ USAGE (imported by other scripts):
 """
 
 import os
-import sys
 
 import torch
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from config import (
+from src.config import (
     PROCESSED_DIR, IMG_SIZE, BATCH_SIZE, NUM_WORKERS,
     IMAGENET_MEAN, IMAGENET_STD
 )
@@ -84,20 +82,20 @@ def get_imagefolder_label_mapping(dataset):
 
 def get_dataloader(split="train", shuffle=False):
     """
-Get a DataLoader for the specified split.
+    Get a DataLoader for the specified split.
 
-We set shuffle=False by default because for feature extraction
-we just need one deterministic pass through the data. The
-training shuffle happened when we created the splits.
+    We set shuffle=False by default because for feature extraction
+    we just need one deterministic pass through the data. The
+    training shuffle happened when we created the splits.
 
-Args:
-    split:   "train", "val", or "test"
-    shuffle: Whether to shuffle (usually False for extraction)
+    Args:
+        split:   "train", "val", or "test"
+        shuffle: Whether to shuffle (usually False for extraction)
 
-Returns:
-    (DataLoader, Dataset) tuple so callers have access to both
-"""
-    
+    Returns:
+        (DataLoader, Dataset) tuple so callers have access to both
+    """
+
     dataset = get_dataset(split)
 
     loader = DataLoader(
