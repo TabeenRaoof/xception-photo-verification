@@ -51,11 +51,13 @@ from tqdm import tqdm
 
 from src.config import (
     FEATURES_DIR, BATCH_SIZE, NUM_WORKERS,
-    PRIMARY_MODEL, ABLATION_MODEL, RANDOM_SEED
+    PRIMARY_MODEL, ABLATION_MODEL, RANDOM_SEED,
+    FREQ_MODEL_NAME, FREQ_N_FFT_BINS, FREQ_DCT_BLOCK_SIZE,
 )
 from src.dataset_loader import (
     get_dataloader, get_imagefolder_label_mapping
 )
+from src.frequency_features import extract_frequency_features
 
 # ---------------------------------------------------------------------------
 # Which models to extract features from
@@ -287,6 +289,90 @@ def main():
         del model
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+
+    # ---------------------------------------------------------------------------
+    # Frequency features (FFT + DCT) — pure numpy/scipy, no GPU needed
+    # ---------------------------------------------------------------------------
+    # We process images one at a time using the dataset.samples list, which gives
+    # us the file path for each image so we can pass it to extract_frequency_features.
+    # Labels are remapped with the same get_imagefolder_label_mapping() used above,
+    # so the y arrays are in the same project convention (0=Real, 1=Forged, 2=AI).
+    # ---------------------------------------------------------------------------
+
+    print(f"\n{'='*60}")
+    print(f"  Extracting frequency features  (FFT + DCT)")
+    print(f"  Output dims: {FREQ_N_FFT_BINS} FFT bins + {FREQ_DCT_BLOCK_SIZE**2 - 1} DCT AC = "
+          f"{FREQ_N_FFT_BINS + FREQ_DCT_BLOCK_SIZE**2 - 1} total")
+    print(f"{'='*60}")
+
+    # We need the label remapping for each split — use train split's mapping
+    # (all splits share the same class folders, so the mapping is identical)
+    freq_label_remap = get_imagefolder_label_mapping(datasets_dict["train"])
+
+    # Store CNN features for ABLATION_MODEL so we can build the combined arrays
+    # after the frequency pass.  Keys: split name → (x_cnn, y_cnn).
+    cnn_features_cache = {}
+    for split in splits:
+        x_cnn_path = os.path.join(FEATURES_DIR, f"{ABLATION_MODEL}_x_{split}.npy")
+        y_cnn_path  = os.path.join(FEATURES_DIR, f"{ABLATION_MODEL}_y_{split}.npy")
+        if os.path.isfile(x_cnn_path):
+            cnn_features_cache[split] = (
+                np.load(x_cnn_path),
+                np.load(y_cnn_path),
+            )
+
+    for split in splits:
+        print(f"\n  --- {split} split ---")
+        split_start = time.time()
+
+        # dataset.samples is a list of (absolute_image_path, imagefolder_label) tuples
+        # in the same order the DataLoader would iterate them (sorted, deterministic).
+        samples = datasets_dict[split].samples
+
+        freq_feats = []
+        freq_labels = []
+
+        for img_path, raw_label in tqdm(
+            samples,
+            desc=f"    freq {split}",
+            unit="img",
+            leave=False,
+        ):
+            # Extract FFT + DCT features from this image's path
+            feat = extract_frequency_features(
+                img_path,
+                n_fft_bins=FREQ_N_FFT_BINS,
+                dct_block_size=FREQ_DCT_BLOCK_SIZE,
+            )                                     # shape: (228,)
+            freq_feats.append(feat)
+
+            # Remap the label to project convention
+            freq_labels.append(freq_label_remap[raw_label])
+
+        # Stack into arrays
+        x_freq = np.stack(freq_feats, axis=0)                    # (N, 163)
+        y_freq = np.array(freq_labels, dtype=np.int64)           # (N,)
+
+        elapsed = time.time() - split_start
+        unique, counts = np.unique(y_freq, return_counts=True)
+        dist = {int(u): int(c) for u, c in zip(unique, counts)}
+        print(f"    Class distribution: {dist}")
+        print(f"    Time: {elapsed:.1f}s")
+
+        # Save frequency-only features
+        save_features(x_freq, y_freq, FREQ_MODEL_NAME, split, FEATURES_DIR)
+
+        # Build and save the combined CNN + frequency feature array.
+        # This lets step3 and step4 treat "mobilenetv2_100_freq" as just
+        # another model name without needing to know about concatenation.
+        if split in cnn_features_cache:
+            x_cnn, y_cnn = cnn_features_cache[split]
+            x_combined = np.concatenate([x_cnn, x_freq], axis=1)  # (N, 1280+228=1508)
+            combined_name = f"{ABLATION_MODEL}_freq"
+            save_features(x_combined, y_cnn, combined_name, split, FEATURES_DIR)
+        else:
+            print(f"    [SKIP] CNN features for {ABLATION_MODEL} not found; "
+                  f"skipping combined feature file for {split}.")
 
     # ---------------------------------------------------------------------------
     # Final summary: list all saved feature files

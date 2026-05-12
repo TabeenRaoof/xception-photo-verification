@@ -92,3 +92,19 @@ RF_CLASS_WEIGHT = "balanced" # to handle any residual imbalance
 SVM_KERNEL = "rbf"
 SVM_C = 10.0
 SVM_GAMMA = "scale"
+
+
+# FREQUENCY FEATURE EXTRACTION
+# -----------------------------
+# Model name used in .npy file naming: freq_x_train.npy, freq_y_train.npy, etc.
+FREQ_MODEL_NAME = "freq"
+
+# Number of radial bins for the azimuthally-averaged FFT magnitude spectrum.
+# Each bin averages all pixels at a given radius from the image center.
+# Higher = more frequency resolution but more noise at the outer (sparse) radii.
+FREQ_N_FFT_BINS = 100
+
+# Block size for the DCT path (JPEG-style 8x8 block DCT).
+# Each non-overlapping block of this size gets its own DCT computed,
+# then statistics are pooled across all blocks.
+FREQ_DCT_BLOCK_SIZE = 8
