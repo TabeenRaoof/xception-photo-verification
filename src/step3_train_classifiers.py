@@ -52,7 +52,8 @@ from src.config import (
     FEATURES_DIR, MODELS_DIR, CLASS_NAMES,
     PRIMARY_MODEL, ABLATION_MODEL, RANDOM_SEED,
     RF_N_ESTIMATORS, RF_MAX_DEPTH, RF_MIN_SAMPLES_SPLIT, RF_CLASS_WEIGHT,
-    SVM_KERNEL, SVM_C, SVM_GAMMA
+    SVM_KERNEL, SVM_C, SVM_GAMMA,
+    FREQ_MODEL_NAME,
 )
 
 def _git_sha():
@@ -90,11 +91,85 @@ def load_features(model_name, split):
             f"Feature file was not found: {x_path}\n"
             f"Did you run step2_extract_features.py first?"
         )
-    
+
     x = np.load(x_path)
     y = np.load(y_path)
 
     return x, y
+
+
+def load_feature_set(descriptor, split):
+    """
+    Load (and optionally concatenate) features for one entry in FEATURE_SETS.
+
+    Each descriptor is a dict with:
+      "cnn"         — CNN model name string (e.g. "mobilenetv2_100"), or None
+      "freq"        — True to include frequency features, False to skip
+      "save_prefix" — used for model file naming (matches the feature-set label)
+      "label"       — human-readable name for printing
+
+    Returns (x, y) where x is (N, features) and y is (N,).
+    """
+    arrays = []
+    y = None
+
+    # CNN features (may be None for frequency-only sets)
+    if descriptor.get("cnn"):
+        x_cnn, y = load_features(descriptor["cnn"], split)
+        arrays.append(x_cnn)
+
+    # Frequency features
+    if descriptor.get("freq"):
+        freq_x_path = os.path.join(FEATURES_DIR, f"{FREQ_MODEL_NAME}_x_{split}.npy")
+        freq_y_path = os.path.join(FEATURES_DIR, f"{FREQ_MODEL_NAME}_y_{split}.npy")
+
+        if not os.path.isfile(freq_x_path):
+            raise FileNotFoundError(
+                f"Frequency feature file not found: {freq_x_path}\n"
+                f"Did you run step2_extract_features.py (it now also extracts freq features)?"
+            )
+
+        x_freq = np.load(freq_x_path)
+
+        # y comes from frequency file if there is no CNN component
+        if y is None:
+            y = np.load(freq_y_path)
+
+        arrays.append(x_freq)
+
+    # Stack all feature blocks side-by-side into one matrix
+    x = np.concatenate(arrays, axis=1)
+
+    return x, y
+
+
+# ---------------------------------------------------------------------------
+# Feature sets for the ablation study
+# ---------------------------------------------------------------------------
+# Each entry defines one row in the final ablation table.
+# "save_prefix" drives the output model file names:
+#   rf_{save_prefix}.joblib, svm_{save_prefix}.joblib, etc.
+# ---------------------------------------------------------------------------
+FEATURE_SETS = [
+    {
+        "label":       f"{ABLATION_MODEL} — CNN only (baseline)",
+        "cnn":         ABLATION_MODEL,
+        "freq":        False,
+        "save_prefix": ABLATION_MODEL,
+    },
+    {
+        "label":       "freq — frequency only (FFT + DCT)",
+        "cnn":         None,
+        "freq":        True,
+        "save_prefix": FREQ_MODEL_NAME,
+    },
+    {
+        "label":       f"{ABLATION_MODEL} + freq — combined",
+        "cnn":         ABLATION_MODEL,
+        "freq":        True,
+        "save_prefix": f"{ABLATION_MODEL}_freq",
+    },
+]
 
 def train_random_forest(x_train, y_train, x_val, y_val):
     """Train a Random Forest classifier and return validation accuracy."""
@@ -173,24 +248,26 @@ def main():
     # Track results for the ablation summary table
     results = []
 
-    # Run the full 2x2 ablation matrix
-    # NOTE: Skipping PRIMARY_MODEL (xception) for the CASIA-Au-augmented run.
-    # Xception SVM training is multi-hour at SAMPLES_PER_CLASS=12500 and the
-    # MobileNetV2 + SVM combination is the established winner across every
-    # data composition tested. Slide 7 already documents this trade-off.
-    # Restore [PRIMARY_MODEL, ABLATION_MODEL] to run the full ablation.
-    for model_name in [ABLATION_MODEL]:
+    # Run the ablation across all three feature sets:
+    #   1. CNN only (MobileNetV2 baseline)
+    #   2. Frequency only (FFT + DCT, content-invariant)
+    #   3. Combined (CNN + frequency — the primary hypothesis)
+    # Each feature set trains both RF and SVM classifiers.
+    # Note: SVM on the combined 1508-d features may take ~45-60 min on CPU.
+    for fset in FEATURE_SETS:
         print(f"\n{'='*60}")
-        print(f"  Feature extractor: {model_name}")
+        print(f"  Feature set: {fset['label']}")
         print(f"{'='*60}")
 
-        # load features
+        # Load (and optionally concatenate) training and validation features
         try:
-            x_train, y_train = load_features(model_name, "train")
-            x_val, y_val = load_features(model_name, "val")
+            x_train, y_train = load_feature_set(fset, "train")
+            x_val,   y_val   = load_feature_set(fset, "val")
         except FileNotFoundError as e:
-            print(f" [SKIP] {e}")
+            print(f"  [SKIP] {e}")
             continue
+
+        save_prefix = fset["save_prefix"]
 
         print(f"  Train: {x_train.shape[0]:,} samples, {x_train.shape[1]} features")
         print(f"  Val:   {x_val.shape[0]:,} samples")
@@ -199,12 +276,12 @@ def main():
         print(f"\n  --- Random Forest ---")
         rf, rf_val_acc = train_random_forest(x_train, y_train, x_val, y_val)
 
-        rf_path = os.path.join(MODELS_DIR, f"rf_{model_name}.joblib")
+        rf_path = os.path.join(MODELS_DIR, f"rf_{save_prefix}.joblib")
         joblib.dump(rf, rf_path)
         save_meta(
             rf_path,
             classifier="random_forest",
-            feature_extractor=model_name,
+            feature_set=fset["label"],
             val_accuracy=rf_val_acc,
             n_estimators=RF_N_ESTIMATORS,
             max_depth=RF_MAX_DEPTH,
@@ -214,20 +291,20 @@ def main():
         )
         print(f"    Saved: {rf_path}")
 
-        results.append((model_name, "Random Forest", rf_val_acc))
+        results.append((fset["label"], "Random Forest", rf_val_acc))
 
         # --- SVM ---
         print(f"\n  --- SVM ---")
         svm, scaler, svm_val_acc = train_svm(x_train, y_train, x_val, y_val)
 
-        svm_path    = os.path.join(MODELS_DIR, f"svm_{model_name}.joblib")
-        scaler_path = os.path.join(MODELS_DIR, f"scaler_{model_name}.joblib")
+        svm_path    = os.path.join(MODELS_DIR, f"svm_{save_prefix}.joblib")
+        scaler_path = os.path.join(MODELS_DIR, f"scaler_{save_prefix}.joblib")
         joblib.dump(svm, svm_path)
         joblib.dump(scaler, scaler_path)
         save_meta(
             svm_path,
             classifier="svm",
-            feature_extractor=model_name,
+            feature_set=fset["label"],
             val_accuracy=svm_val_acc,
             kernel=SVM_KERNEL,
             C=SVM_C,
@@ -238,17 +315,16 @@ def main():
         print(f"    Saved: {svm_path}")
         print(f"    Saved: {scaler_path}")
 
-        results.append((model_name, "SVM", svm_val_acc))
+        results.append((fset["label"], "SVM", svm_val_acc))
 
     # Print ablation summary
     print(f"\n{'='*60}")
     print(f"  ABLATION RESULTS (Validation Accuracy)")
     print(f"{'='*60}")
-    print(f"\n  {'Feature Extractor':<25} {'Classifier':<18} {'Val Acc':>10}")
-    print(f"  {'-'*53}")
-    for model_name, clf_name, val_acc in results:
-        marker = " ← primary" if model_name == PRIMARY_MODEL and clf_name == "Random Forest" else ""
-        print(f"  {model_name:<25} {clf_name:<18} {val_acc:>9.4f}{marker}")
+    print(f"\n  {'Feature Set':<45} {'Classifier':<18} {'Val Acc':>10}")
+    print(f"  {'-'*73}")
+    for feature_label, clf_name, val_acc in results:
+        print(f"  {feature_label:<45} {clf_name:<18} {val_acc:>9.4f}")
 
     # Identify best combination
     if results:

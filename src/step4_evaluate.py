@@ -32,7 +32,8 @@ from sklearn.metrics import (
 
 from src.config import (
     MODELS_DIR, RESULTS_DIR, CLASS_NAMES,
-    PRIMARY_MODEL, ABLATION_MODEL, FEATURES_DIR
+    PRIMARY_MODEL, ABLATION_MODEL, FEATURES_DIR,
+    FREQ_MODEL_NAME,
 )
 
 LABEL_NAMES = [CLASS_NAMES[i] for i in sorted(CLASS_NAMES.keys())]
@@ -168,7 +169,15 @@ def main():
     os.makedirs(RESULTS_DIR, exist_ok=True)
     all_results = []
 
-    for model_name in [PRIMARY_MODEL, ABLATION_MODEL]:
+    # Evaluate all feature sets: CNN baseline, frequency-only, combined.
+    # Each name maps directly to {name}_x_test.npy saved by step2.
+    models_to_eval = [
+        ABLATION_MODEL,                       # CNN only (MobileNetV2)
+        FREQ_MODEL_NAME,                      # frequency only (FFT + DCT)
+        f"{ABLATION_MODEL}_freq",             # combined CNN + frequency
+    ]
+
+    for model_name in models_to_eval:
         # Load test features
         try:
             X_test, y_test = load_features(model_name, "test")

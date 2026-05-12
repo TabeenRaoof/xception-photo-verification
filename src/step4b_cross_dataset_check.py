@@ -30,10 +30,16 @@ from sklearn.metrics import accuracy_score
 from src.config import (
     ABLATION_MODEL, ARTIFACT_DIR, CASIA2_DIR, CLASS_NAMES,
     FEATURES_DIR, MODELS_DIR, PRIMARY_MODEL, RESULTS_DIR,
+    FREQ_MODEL_NAME,
 )
 
 
-SUPPORTED_BACKBONES = [PRIMARY_MODEL, ABLATION_MODEL]
+SUPPORTED_BACKBONES = [
+    PRIMARY_MODEL,                       # xception
+    ABLATION_MODEL,                      # mobilenetv2_100
+    FREQ_MODEL_NAME,                     # freq (frequency-only)
+    f"{ABLATION_MODEL}_freq",            # mobilenetv2_100_freq (combined)
+]
 SUPPORTED_CLASSIFIERS = ["rf", "svm"]
 
 
